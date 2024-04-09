@@ -13,12 +13,18 @@ def get_connection():
     return pyodbc.connect(conn_str)
 
 # Function to read data from the database
-def read_data(table):
+def read_data(table, order_id=None) :
     with get_connection() as conn:
-        if table.lower() == 'order':
-            table = '[Order]'
-        query = f"SELECT * FROM {table}"
-        return pd.read_sql(query, conn)
+        if table.lower() == 'order' and order_id is not None:
+            cursor = conn.cursor()
+            cursor.execute("EXEC GetOrderDetailsByCustomerOrOrderID @OrderID=?", (order_id,))
+            columns = [column[0] for column in cursor.description]
+            data = cursor.fetchall()
+            return pd.DataFrame.from_records(data, columns=columns)      
+        else:      
+            table = f"[{table}]" if table.lower() == 'order' else table
+            query = f"SELECT * FROM {table}"
+            return pd.read_sql(query, conn)
     
 def add_product(brand_id, category_id, price, description, product_name, quantity, size, color, location, batch_number):
     with get_connection() as conn:
@@ -347,33 +353,165 @@ def update_payment_status(invoice_number, new_status):
         print("An error occurred while updating payment status:", e)
         return False
 
+def get_order_details(order_id):
+    try:
+        with get_connection() as conn:
+            query = """
+            SELECT o.OrderID, o.OrderStatus, i.InvoiceNumber
+            FROM [Order] o
+            JOIN Invoice i ON o.OrderID = i.OrderID
+            WHERE o.OrderID = ?
+            """
+            order_details = pd.read_sql(query, conn, params=(order_id,))
+            return order_details
+    except Exception as e:
+        print("Error fetching order details:", e)
+        return pd.DataFrame()
 
+def update_delivery_status(invoice_number, new_status):
+    print(f"Updating status for invoice {invoice_number} to {new_status}") 
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            check_query = "SELECT COUNT(*) FROM Delivery WHERE InvoiceNumber = ?"
+            cursor.execute(check_query, int(invoice_number))
+            if cursor.fetchone()[0] == 0:
+                message=(f"No delivery record found for Invoice Number: {invoice_number}. Update aborted.")
+                return False, message
+
+            query = "UPDATE Delivery SET DeliveryStatus = ? WHERE InvoiceNumber = ?"
+            cursor.execute(query, (new_status, int(invoice_number)))
+            affected_rows = cursor.rowcount
+            conn.commit()
+
+            if affected_rows > 0:
+                message=(f"Delivery status updated successfully for {affected_rows} row(s).")
+                return True,message
+            else:
+                message=(f"Update failed or no rows affected for Invoice Number: {invoice_number}.")
+                return False,message
+
+    except Exception as e:
+        message=(f"Error updating delivery status: {e}")
+        return False,message
+
+def get_customer_addresses(customer_id):
+    try:
+        with get_connection() as conn:
+            query = "SELECT * FROM Address WHERE CustomerID = ?"
+            return pd.read_sql(query, conn, params=(customer_id,))
+    except Exception as e:
+        print(f"Error fetching addresses: {e}")
+        return pd.DataFrame()
+
+def update_address(address_id, recipient_name, street_address1, street_address2, city, state, postal_code, country):
+    print("Inside update address")
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            query = """
+            UPDATE Address
+            SET RecipientName = ?, StreetAddress1 = ?, StreetAddress2 = ?, City = ?, [State] = ?, PostalCode = ?, Country = ?
+            WHERE AddressID = ?;
+            """
+            cursor.execute(query, (recipient_name, street_address1, street_address2, city, state, postal_code, country, int(address_id)))
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"Error updating address: {e}")
+        return False
+    
+def get_order_details_by_customer_or_order_id(customer_id=None, order_id=None):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        if customer_id is not None:
+            cursor.execute("EXEC GetOrderDetailsByCustomerOrOrderID @CustomerID=?", int(customer_id))
+        elif order_id is not None:
+            cursor.execute("EXEC GetOrderDetailsByCustomerOrOrderID @OrderID=?", int(order_id))
+        else:
+            return pd.DataFrame()  # Return an empty DataFrame if neither parameter is provided
+
+        columns = [column[0] for column in cursor.description]
+        results = cursor.fetchall()
+        df = pd.DataFrame.from_records(results, columns=columns)
+        return df
+
+st.markdown(
+    """
+    <style>
+    @keyframes fadeIn {
+        0% { opacity: 0; }
+        100% { opacity: 1; }
+    }
+
+    .title-animation {
+        animation-name: fadeIn;
+        animation-duration: 2s;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+st.markdown('<h1 class="title-animation">Online Fashion Retail Management</h1>', unsafe_allow_html=True)    
 # Streamlit UI
-st.title('Online Fashion Retail Management')
+#st.title('Online Fashion Retail Management')
 
 # Choose operation
 st.sidebar.title("Operations")
-operation = st.sidebar.selectbox('Choose Operation', ['Read', 'Insert', 'Update', 'Delete'])
-
+operation = st.sidebar.radio('Choose Operation', ['Read', 'Insert', 'Update'])
+# customer_id = st.number_input('Enter Customer ID (leave blank for order ID)', value=0, step=1)
+# order_id = st.number_input('Enter Order ID (leave blank for customer ID)', value=0, step=1)
+# if st.button('Show Order Details'):
+#     # Check which input to use
+#     if customer_id > 0:
+#         df = get_order_details_by_customer_or_order_id(customer_id=customer_id)
+#     elif order_id > 0:
+#         df = get_order_details_by_customer_or_order_id(order_id=order_id)
+#     else:
+#         st.error('Please enter a Customer ID or Order ID.')
+#         df = pd.DataFrame()
+    
+#     # Display the DataFrame
+#     if not df.empty:
+#         st.write(df)
+#     else:
+#         st.write('No details found for the provided ID.')
 # Define list of table names
-table_names = [
+table_names = {
+    'Read': [
     'Customer', 'Address', 'Cart', 'Brand', 'Category', 'Product', 'CartItem',
     'Inventory', 'InventoryProduct', 'Order', 'OrderDetails', 'Invoice', 'Payment',
     'DeliveryPerson', 'Delivery', 'Review', 'Shipping'
-]
+], # and so on for all options
+    'Insert': ['Product', 'Customer', 'Address', 'Order', 'CartItem', 'Inventory', 'InventoryProduct', 'Brand', 'DeliveryPerson', 'Review'],       # use your existing lists here
+    'Update': ['Customer', 'CartItem', 'Payment', 'Delivery', 'Address'] 
+}
 
-selected_table = st.sidebar.selectbox('Choose Table', table_names)
 if 'cart_items' not in st.session_state:
     st.session_state['cart_items'] = pd.DataFrame()
 if operation == 'Read':
+        selected_table = st.sidebar.selectbox('Choose Table', table_names['Read']) 
         try:
-            df = read_data(selected_table)
-            st.dataframe(df)
+            if selected_table.lower() == 'order':
+                fetch_method = st.radio("Fetch method", ("All Orders", "By Order ID"))
+                if fetch_method == "By Order ID":
+                    order_id = st.number_input("Enter Order ID", min_value=1)
+                    if st.button("Fetch Order Details"):
+                      df = read_data(selected_table, order_id=order_id)
+                      st.dataframe(df)
+                else:
+                    df = read_data(selected_table)
+                    st.dataframe(df)
+            else:
+                df = read_data(selected_table)
+                st.dataframe(df)
         except Exception as e:
             st.error('Error while fetching the data.')
             st.exception(e)
 
 elif operation == 'Insert':
+    selected_table = st.sidebar.selectbox('Choose Table', table_names['Insert'])
     if selected_table == 'Product':
         with st.form("Product Form",clear_on_submit=True):
             brand_id = st.number_input("Brand ID", min_value=1)
@@ -567,6 +705,7 @@ elif operation == 'Insert':
 
 
 elif operation == 'Update':
+    selected_table = st.sidebar.selectbox('Choose Table',  table_names['Update'])
     if selected_table == 'Customer':
         customer_id = st.number_input('Enter Customer ID', min_value=0, step=1, key='customer_id')
 
@@ -620,37 +759,102 @@ elif operation == 'Update':
         else:
             st.warning('No items in the cart.')
 
-    if operation == 'Update':
-        if selected_table == 'Payment':
-            invoice_number = st.number_input("Enter Invoice Number", min_value=0, step=1, key='invoice_number')
+    if selected_table == 'Payment':
+        invoice_number = st.number_input("Enter Invoice Number", min_value=0, step=1, key='invoice_number')
 
-            # Fetch and display invoice details
-            if invoice_number:
-                invoice_details = get_invoice_details(invoice_number)
-                if not invoice_details.empty:
-                    st.write(invoice_details)
+        # Fetch and display invoice details
+        if invoice_number:
+            invoice_details = get_invoice_details(invoice_number)
+            if not invoice_details.empty:
+                st.write(invoice_details)
                     
-                    # Fetch current status
-                    payment_details=get_payment_details(invoice_number)
-                    current_status = payment_details['Status'].iloc[0]
-                    st.write(f"Current Payment Status: {current_status}")
+                # Fetch current status
+                payment_details=get_payment_details(invoice_number)
+                current_status = payment_details['Status'].iloc[0]
+                st.write(f"Current Payment Status: {current_status}")
 
-                    # New status input
-                    new_status_options = ['Success', 'Pending', 'Failed']  # Update as per CHECK constraint
-                    new_status = st.selectbox("Select New Payment Status", new_status_options, key='new_status')
+                # New status input
+                new_status_options = ['Success', 'Pending', 'Failed']  # Update as per CHECK constraint
+                new_status = st.selectbox("Select New Payment Status", new_status_options, key='new_status')
                     
-                    # Update button
-                    if st.button('Update Payment Status'):
-                        if new_status not in new_status_options:
-                            st.error("Invalid payment status.")
+                # Update button
+                if st.button('Update Payment Status'):
+                    if new_status not in new_status_options:
+                        st.error("Invalid payment status.")
+                    else:
+                        success = update_payment_status(invoice_number, new_status)
+                        if success:
+                            st.success("Payment status updated successfully.")
                         else:
-                            success = update_payment_status(invoice_number, new_status)
-                            if success:
-                                st.success("Payment status updated successfully.")
-                            else:
-                                st.error("Failed to update payment status.")
+                            st.error("Failed to update payment status.")
+            else:
+                st.error("Invoice not found.")
+    if selected_table == 'Delivery':
+        order_id = st.number_input("Enter Order ID", min_value=1, format="%d")
+        load_order_details = st.button("Load Order Details")
+
+        # Use session state to store and retain order details
+        if 'order_details' not in st.session_state:
+            st.session_state['order_details'] = pd.DataFrame()
+
+        if load_order_details or not st.session_state['order_details'].empty:
+            if load_order_details:  # Load details only if the button is clicked
+                st.session_state['order_details'] = get_order_details(order_id)
+
+            order_details = st.session_state['order_details']
+
+            if not order_details.empty:
+                st.write(order_details)
+                if order_details['OrderStatus'].iloc[0] == 'Ready to Ship':
+                    new_status = st.selectbox("Select New Status", ['Pending', 'In Transit', 'Delivered', 'Failed'])
+                    if st.button("Update Status"):
+                        success, message = update_delivery_status(order_details['InvoiceNumber'].iloc[0], new_status)
+                        if success:
+                            st.success(message)
+                        else:
+                            st.error(message)
                 else:
-                    st.error("Invoice not found.")
+                    st.warning("Order status is not 'Ready to Ship'. Unable to update delivery status.")
+            else:
+                st.warning("No order details found for the provided order ID.")
+
+    if selected_table == 'Address':
+        customer_id = st.number_input("Customer ID", min_value=1, format="%d")
+
+        # Only one st.button call with a unique key
+        load_addresses_clicked = st.button("Load Addresses", key="load_addresses")
+
+        if load_addresses_clicked or 'addresses' in st.session_state:
+            if 'addresses' not in st.session_state or load_addresses_clicked:
+                st.session_state['addresses'] = get_customer_addresses(customer_id)
+
+            addresses = st.session_state['addresses']
+
+            if not addresses.empty:
+                st.write(addresses)
+                selected_address_id = st.selectbox("Select Address ID", addresses['AddressID'].unique())
+
+                # Get the details of the selected address
+                selected_address = addresses[addresses['AddressID'] == selected_address_id].iloc[0]
+
+                recipient_name = st.text_input("Recipient Name", value=selected_address['RecipientName'], key="recipient_name")
+                street_address1 = st.text_input("Street Address 1", value=selected_address['StreetAddress1'], key="street_address1")
+                street_address2 = st.text_input("Street Address 2", value=selected_address['StreetAddress2'] or "", key="street_address2")
+                city = st.text_input("City", value=selected_address['City'], key="city")
+                state = st.text_input("State", value=selected_address['State'], key="state")
+                postal_code = st.text_input("Postal Code", value=selected_address['PostalCode'], key="postal_code")
+                country = st.text_input("Country", value=selected_address['Country'], key="country")
+
+                if st.button("Update Address", key="update_address"):
+                    if update_address(selected_address_id, recipient_name, street_address1, street_address2, city, state, postal_code, country):
+                        st.success("Address updated successfully!")
+                        # Clear addresses to force refresh on next 'Load Addresses' press
+                        del st.session_state['addresses']
+                    else:
+                        st.error("Failed to update address.")
+            else:
+                st.warning("This customer does not have any addresses.")
+
 
 # Close the sidebar operations block with an else statement for a clean finish
 else:

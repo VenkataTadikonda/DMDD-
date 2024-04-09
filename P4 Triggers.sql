@@ -165,7 +165,7 @@ END;
 GO
 ----------------------------------------------------------------------------------------------------------------------------------
 --------------------------------------------------------Create Cart for Customer -------------------------------------------------
-CREATE TRIGGER CreateCartForNewCustomer
+CREATE OR ALTER TRIGGER CreateCartForNewCustomer
 ON Customer
 AFTER INSERT
 AS
