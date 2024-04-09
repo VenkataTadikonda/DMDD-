@@ -32,4 +32,4 @@ MANIFEST
 .DS_Store
 
 # Python virtual environment
-venv/
+.venv/

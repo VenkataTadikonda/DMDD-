@@ -27,3 +27,6 @@ ADD CONSTRAINT CHK_Status CHECK (Status IN ('Success', 'Pending', 'Failed'))
 
 ALTER TABLE Delivery
 ADD CONSTRAINT CHK_DeliveryStatus CHECK (DeliveryStatus IN ('Pending', 'In Transit', 'Delivered', 'Failed'))
+
+ALTER TABLE Review
+ADD CONSTRAINT UQ_Customer_OrderDetails UNIQUE (CustomerID, OrderDetailsID);
